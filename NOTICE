@@ -1,0 +1,6 @@
+adhoc-crypto
+Copyright Chikirev Sirguy, Unirail Group.
+
+This product statically links BoringSSL (https://boringssl.googlesource.com/boringssl),
+under its own licenses: Apache License 2.0, ISC and the OpenSSL and SSLeay licenses. See LICENSE
+in the BoringSSL source tree.

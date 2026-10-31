@@ -1,0 +1,193 @@
+name: release
+
+# adhoc-crypto: BoringSSL and the code of src/, for every platform BoringSSL builds for, in the layout of zstd-jni.
+#
+#   every push                           builds and tests the platforms, and replaces the release `native`
+#   a pull request                       builds and tests, publishes nothing
+#
+# What the builds take from the last release, at stable addresses:
+#   https://github.com/AdHoc-Protocol/adhoc-crypto/releases/latest/download/adhoc-crypto.jar           Java, as zstd-jni
+#   https://github.com/AdHoc-Protocol/adhoc-crypto/releases/latest/download/adhoc-crypto-natives.zip   the other languages, <rid>/libadhoc-crypto-<version>.<ext>
+#   https://github.com/AdHoc-Protocol/adhoc-crypto/releases/latest/download/SHA256SUMS.txt             what changed
+#
+# The platforms of zstd-jni that are not here have no BoringSSL: ppc64, ppc64le, s390x, loongarch64, aix, 32-bit freebsd.
+# BoringSSL is the latest main at every run: versions are not pinned. The version of the library is VERSION: the languages name the file by it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: '25'
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: echo "version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    name: ${{ matrix.os }}/${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux is built in the oldest images that still have the compiler BoringSSL asks for, so it loads on old systems too.
+          - { os: linux, arch: amd64, runner: ubuntu-24.04, image: 'quay.io/pypa/manylinux_2_28_x86_64', test: 'host' }
+          - { os: linux, arch: aarch64, runner: ubuntu-24.04-arm, image: 'quay.io/pypa/manylinux_2_28_aarch64', test: 'host' }
+          - { os: linux-musl, arch: amd64, runner: ubuntu-24.04, image: 'alpine:latest', test: 'eclipse-temurin:25-jdk-alpine' }
+          - { os: linux-musl, arch: aarch64, runner: ubuntu-24.04-arm, image: 'alpine:latest', test: 'eclipse-temurin:25-jdk-alpine' }
+          # Under emulation, slowly, and only built: the runners have no JDK of these to load it in.
+          - { os: linux, arch: i386, runner: ubuntu-24.04, image: 'quay.io/pypa/manylinux_2_28_i686', platform: 'linux/386', test: 'none' }
+          - { os: linux, arch: arm, runner: ubuntu-24.04-arm, image: 'quay.io/pypa/manylinux_2_31_armv7l', platform: 'linux/arm/v7', test: 'none' }
+          - { os: linux, arch: riscv64, runner: ubuntu-24.04, image: 'quay.io/pypa/manylinux_2_39_riscv64', platform: 'linux/riscv64', test: 'none' }
+          - { os: win, arch: amd64, runner: windows-latest, test: 'host' }
+          - { os: win, arch: aarch64, runner: windows-11-arm, test: 'host' }
+          - { os: win, arch: x86, runner: windows-latest, msvc: 'amd64_x86', test: 'none' }
+          - { os: darwin, arch: aarch64, runner: macos-latest, test: 'host' }
+          - { os: darwin, arch: x86_64, runner: macos-15-intel, test: 'host' }
+          - { os: freebsd, arch: amd64, runner: ubuntu-24.04, test: 'none' }
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Emulation
+        if: matrix.platform
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build in a container
+        if: matrix.image
+        run: |
+          docker run --rm ${{ matrix.platform && format('--platform {0}', matrix.platform) || '' }} -v "$PWD:/w" -v "$JAVA_HOME:/jdk:ro" -e JAVA_HOME=/jdk -w /w '${{ matrix.image }}' sh -c '
+            set -e
+            if command -v apk >/dev/null; then apk add --no-cache bash build-base cmake git linux-headers ninja; fi
+            git config --global --add safe.directory "*"
+            bash scripts/build.sh ${{ matrix.os }} ${{ matrix.arch }} '"$VERSION"'
+          '
+
+      - name: Build on FreeBSD
+        if: matrix.os == 'freebsd'
+        uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          prepare: pkg install -y bash cmake ninja git gcc openjdk21
+          run: JAVA_HOME=/usr/local/openjdk21 bash scripts/build.sh freebsd amd64 "$VERSION"
+          envs: VERSION
+
+      - name: Tools of Windows
+        if: matrix.os == 'win'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc || (matrix.arch == 'aarch64' && 'arm64' || 'amd64') }}
+      - name: NASM
+        if: matrix.os == 'win'
+        uses: ilammy/setup-nasm@v1
+      - name: Build on Windows
+        if: matrix.os == 'win'
+        shell: bash
+        run: |
+          choco install ninja -y --no-progress
+          export JAVA_HOME=$(cygpath -m "$JAVA_HOME")
+          WORK=$(cygpath -m "$PWD")/out/work bash scripts/build.sh win ${{ matrix.arch }} "$VERSION"
+
+      - name: Build on macOS
+        if: matrix.os == 'darwin'
+        run: |
+          brew install ninja
+          bash scripts/build.sh darwin ${{ matrix.arch }} "$VERSION"
+
+      - name: A jar of this platform alone
+        shell: bash
+        run: bash scripts/jar.sh "$VERSION"
+
+      - name: Test on the runner
+        if: matrix.test == 'host'
+        shell: bash
+        run: bash test/test.sh "out/adhoc-crypto-$VERSION.jar"
+
+      - name: Test in a container
+        if: matrix.test != 'host' && matrix.test != 'none'
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w '${{ matrix.test }}' sh -c '
+            apk add --no-cache bash
+            JAVA_HOME=${JAVA_HOME:-/opt/java/openjdk} bash test/test.sh out/adhoc-crypto-'"$VERSION"'.jar
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.os }}-${{ matrix.arch }}
+          path: out/natives
+          retention-days: 7
+
+  jar:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: out/natives
+          pattern: native-*
+          merge-multiple: true
+      - name: The jar of all the platforms
+        run: bash scripts/jar.sh "$VERSION"
+      - name: It loads and works from the jar
+        run: bash test/test.sh "out/adhoc-crypto-$VERSION.jar"
+      - name: The folders of the other languages
+        run: bash scripts/pack.sh
+      - name: A name that does not change
+        run: |
+          cp "out/adhoc-crypto-$VERSION.jar" out/adhoc-crypto.jar
+          ( cd out && sha256sum adhoc-crypto.jar adhoc-crypto-natives.zip > SHA256SUMS.txt && cat SHA256SUMS.txt )
+      - uses: actions/upload-artifact@v4
+        with:
+          name: adhoc-crypto
+          path: |
+            out/adhoc-crypto.jar
+            out/adhoc-crypto-natives.zip
+            out/SHA256SUMS.txt
+          retention-days: 30
+
+  release:
+    if: github.event_name != 'pull_request'
+    needs: jar
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # only this job may touch the release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: adhoc-crypto
+      - name: The release `native`, of this push
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete native --cleanup-tag --yes || true
+          gh release create native --target "$GITHUB_SHA" --latest --title "native $(date -u +%Y-%m-%d) ${GITHUB_SHA::7}" --notes "BoringSSL latest main, $GITHUB_REF_NAME ${GITHUB_SHA}." adhoc-crypto.jar adhoc-crypto-natives.zip SHA256SUMS.txt

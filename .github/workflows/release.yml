@@ -62,6 +62,10 @@ jobs:
           - { os: darwin, arch: aarch64, runner: macos-latest, test: 'host' }
           - { os: darwin, arch: x86_64, runner: macos-15-intel, test: 'host' }
           - { os: freebsd, arch: amd64, runner: ubuntu-24.04, test: 'none' }
+          - { os: android, arch: arm64-v8a, runner: ubuntu-24.04, test: 'none' }
+          - { os: android, arch: armeabi-v7a, runner: ubuntu-24.04, test: 'none' }
+          - { os: android, arch: x86_64, runner: ubuntu-24.04, test: 'none' }
+          - { os: android, arch: x86, runner: ubuntu-24.04, test: 'none' }
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
@@ -111,6 +115,13 @@ jobs:
           export JAVA_HOME=$(cygpath -m "$JAVA_HOME")
           WORK=$(cygpath -m "$PWD")/out/work bash scripts/build.sh win ${{ matrix.arch }} "$VERSION"
 
+      - name: Build for Android
+        if: matrix.os == 'android'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build
+          ANDROID_NDK_ROOT=${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_ROOT} bash scripts/build.sh android ${{ matrix.arch }} "$VERSION"
+
       - name: Build on macOS
         if: matrix.os == 'darwin'
         run: |
@@ -118,6 +129,7 @@ jobs:
           bash scripts/build.sh darwin ${{ matrix.arch }} "$VERSION"
 
       - name: A jar of this platform alone
+        if: matrix.os != 'android'
         shell: bash
         run: bash scripts/jar.sh "$VERSION"
 
@@ -162,15 +174,18 @@ jobs:
         run: bash test/test.sh "out/adhoc-crypto-$VERSION.jar"
       - name: The folders of the other languages
         run: bash scripts/pack.sh
+      - name: The aar of Android
+        run: bash scripts/aar.sh "$VERSION"
       - name: A name that does not change
         run: |
           cp "out/adhoc-crypto-$VERSION.jar" out/adhoc-crypto.jar
-          ( cd out && sha256sum adhoc-crypto.jar adhoc-crypto.zip > SHA256SUMS.txt && cat SHA256SUMS.txt )
+          ( cd out && sha256sum adhoc-crypto.jar adhoc-crypto.aar adhoc-crypto.zip > SHA256SUMS.txt && cat SHA256SUMS.txt )
       - uses: actions/upload-artifact@v4
         with:
           name: adhoc-crypto
           path: |
             out/adhoc-crypto.jar
+            out/adhoc-crypto.aar
             out/adhoc-crypto.zip
             out/SHA256SUMS.txt
           retention-days: 30
@@ -191,4 +206,4 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           gh release delete native --cleanup-tag --yes || true
-          gh release create native --target "$GITHUB_SHA" --latest --title "native $(date -u +%Y-%m-%d) ${GITHUB_SHA::7}" --notes "BoringSSL latest main, $GITHUB_REF_NAME ${GITHUB_SHA}." adhoc-crypto.jar adhoc-crypto.zip SHA256SUMS.txt
+          gh release create native --target "$GITHUB_SHA" --latest --title "native $(date -u +%Y-%m-%d) ${GITHUB_SHA::7}" --notes "BoringSSL latest main, $GITHUB_REF_NAME ${GITHUB_SHA}." adhoc-crypto.jar adhoc-crypto.aar adhoc-crypto.zip SHA256SUMS.txt

@@ -11,6 +11,7 @@ rm -rf "$OUT" "$OUT.zip"
 for dir in "$ROOT"/out/natives/*/*/; do
   arch=$(basename "$dir")
   os=$(basename "$(dirname "$dir")")
+  [ "$os" = android ] && continue # aar.sh
   case $os in
     win) o=win ;;
     darwin) o=osx ;;

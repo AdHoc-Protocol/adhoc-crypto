@@ -36,6 +36,8 @@ final class Native
 
     private static String os()
     {
+        if ("Dalvik".equals(System.getProperty("java.vm.name")))
+            return "android"; //calls itself linux, and no library of Linux loads on it: its library is in the APK, from the aar
         final String name = System.getProperty("os.name").toLowerCase().replace(" ", "");
         if (name.startsWith("win"))
             return "win";

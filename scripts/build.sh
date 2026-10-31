@@ -2,7 +2,7 @@
 # Builds out/natives/<os>/<arch>/libadhoc-crypto-<version>.<ext> for the platform it runs on: BoringSSL, statically, and the
 # JNI code around it. In gen/ BoringSSL has its assembly ready, so neither Perl nor Go is needed; on Windows x86-64 NASM is.
 #
-#   build.sh <os> <arch> <version>      os: win, linux, linux-musl, darwin, freebsd; arch: amd64, aarch64, x86_64, x86, i386, arm, riscv64
+#   build.sh <os> <arch> <version>      os: win, linux, linux-musl, darwin, freebsd, android; arch: amd64, aarch64, x86_64, x86, i386, arm, riscv64; on android its ABI
 #
 # JAVA_HOME gives jni.h. BORINGSSL names a checkout to use; without it the latest main is cloned: versions are not pinned.
 # On Windows run it from a shell with vcvars64 applied, clang-cl, cmake, ninja and nasm on PATH.
@@ -40,14 +40,33 @@ case $OS in
     strip -x "$OUT/libadhoc-crypto-$VERSION.dylib"
     ;;
   linux | linux-musl | freebsd)
-    # -Wno-stringop-overflow: a false alarm of GCC inside BoringSSL on riscv64, and BoringSSL builds with -Werror.
-    cmake -S "$SRC" -B "$WORK/b" "${GEN[@]}" -DCMAKE_POSITION_INDEPENDENT_CODE=ON "-DCMAKE_C_FLAGS=-Wno-stringop-overflow" "-DCMAKE_CXX_FLAGS=-Wno-stringop-overflow"
+    # -Wno-stringop-overflow: a false alarm of GCC inside BoringSSL on riscv64, and BoringSSL builds with -Werror. The clang of FreeBSD does not know the flag.
+    QUIET=
+    [ "$OS" = freebsd ] || QUIET=-Wno-stringop-overflow
+    cmake -S "$SRC" -B "$WORK/b" "${GEN[@]}" -DCMAKE_POSITION_INDEPENDENT_CODE=ON "-DCMAKE_C_FLAGS=$QUIET" "-DCMAKE_CXX_FLAGS=$QUIET"
     cmake --build "$WORK/b" --target ssl crypto
     JNI_OS=${OS%-musl}
     # BoringSSL is C++: its runtime goes inside the library, which then needs only libc, libm and libpthread.
     gcc -c -O2 -fPIC -fvisibility=hidden -I"$SRC/include" -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/$JNI_OS" "$ROOT/src/adhoc_crypto.c" -o "$WORK/adhoc_crypto.o"
     g++ -shared "$WORK/adhoc_crypto.o" "$WORK/b/libssl.a" "$WORK/b/libcrypto.a" -static-libstdc++ -static-libgcc -Wl,--exclude-libs,ALL -Wl,-z,noexecstack -Wl,-z,relro,-z,now -Wl,--gc-sections -lpthread -o "$OUT/libadhoc-crypto-$VERSION.so"
     strip "$OUT/libadhoc-crypto-$VERSION.so"
+    ;;
+  android)
+    # arch is the ABI of Android. ANDROID_NDK_ROOT is the NDK. 16 KB pages: what Android asks of a library from version 15.
+    API=24
+    case $ARCH in
+      arm64-v8a) T=aarch64-linux-android ;;
+      armeabi-v7a) T=armv7a-linux-androideabi ;;
+      x86_64) T=x86_64-linux-android ;;
+      x86) T=i686-linux-android ;;
+      *) echo "unknown ABI $ARCH" >&2; exit 2 ;;
+    esac
+    TOOLS=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin
+    cmake -S "$SRC" -B "$WORK/b" "${GEN[@]}" "-DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" "-DANDROID_ABI=$ARCH" "-DANDROID_PLATFORM=android-$API"
+    cmake --build "$WORK/b" --target ssl crypto
+    "$TOOLS/$T$API-clang" -c -O2 -fPIC -fvisibility=hidden -I"$SRC/include" "$ROOT/src/adhoc_crypto.c" -o "$WORK/adhoc_crypto.o"
+    "$TOOLS/$T$API-clang++" -shared "$WORK/adhoc_crypto.o" "$WORK/b/libssl.a" "$WORK/b/libcrypto.a" -static-libstdc++ -Wl,--exclude-libs,ALL -Wl,-z,noexecstack -Wl,-z,relro,-z,now -Wl,-z,max-page-size=16384 -Wl,--gc-sections -o "$OUT/libadhoc-crypto-$VERSION.so"
+    "$TOOLS/llvm-strip" "$OUT/libadhoc-crypto-$VERSION.so"
     ;;
   *) echo "unknown os $OS" >&2; exit 2 ;;
 esac

@@ -13,8 +13,9 @@ You do not need this repository to use AdHoc: the library comes with the generat
 | File | What it is |
 |:--|:--|
 | `adhoc-crypto.jar` | for Java, in the layout of zstd-jni: `<os>/<arch>/libadhoc-crypto-<version>.<ext>` |
+| `adhoc-crypto.aar` | for Java on Android: `jni/<abi>/libadhoc-crypto-<version>.so` |
 | `adhoc-crypto.zip` | for the other languages: `<rid>/libadhoc-crypto-<version>.<ext>` |
-| `SHA256SUMS.txt` | the sums of the two |
+| `SHA256SUMS.txt` | the sums of the three |
 
 | System | Processors |
 |:--|:--|
@@ -23,6 +24,7 @@ You do not need this repository to use AdHoc: the library comes with the generat
 | Linux with musl | x64, arm64 |
 | macOS | x64, arm64 |
 | FreeBSD | x64 |
+| Android | arm64-v8a, armeabi-v7a, x86_64, x86 |
 
 BoringSSL is its latest main at every build. `VERSION` is the version in the name of the file, and the runtimes look for that name.
 

@@ -46,9 +46,11 @@ case $OS in
     cmake -S "$SRC" -B "$WORK/b" "${GEN[@]}" -DCMAKE_POSITION_INDEPENDENT_CODE=ON "-DCMAKE_C_FLAGS=$QUIET" "-DCMAKE_CXX_FLAGS=$QUIET"
     cmake --build "$WORK/b" --target ssl crypto
     JNI_OS=${OS%-musl}
-    # BoringSSL is C++: its runtime goes inside the library, which then needs only libc, libm and libpthread.
+    # BoringSSL is C++: its runtime goes inside the library, which then needs only libc, libm and libpthread. An image with no static one: the system's at run time.
+    STATIC=(-static-libstdc++ -static-libgcc)
+    [ -f "$(g++ -print-file-name=libstdc++.a)" ] || STATIC=(-static-libgcc)
     gcc -c -O2 -fPIC -fvisibility=hidden -I"$SRC/include" -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/$JNI_OS" "$ROOT/src/adhoc_crypto.c" -o "$WORK/adhoc_crypto.o"
-    g++ -shared "$WORK/adhoc_crypto.o" "$WORK/b/libssl.a" "$WORK/b/libcrypto.a" -static-libstdc++ -static-libgcc -Wl,--exclude-libs,ALL -Wl,-z,noexecstack -Wl,-z,relro,-z,now -Wl,--gc-sections -lpthread -o "$OUT/libadhoc-crypto-$VERSION.so"
+    g++ -shared "$WORK/adhoc_crypto.o" "$WORK/b/libssl.a" "$WORK/b/libcrypto.a" "${STATIC[@]}" -Wl,--exclude-libs,ALL -Wl,-z,noexecstack -Wl,-z,relro,-z,now -Wl,--gc-sections -lpthread -o "$OUT/libadhoc-crypto-$VERSION.so"
     strip "$OUT/libadhoc-crypto-$VERSION.so"
     ;;
   android)

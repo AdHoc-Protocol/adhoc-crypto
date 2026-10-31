@@ -85,6 +85,7 @@ jobs:
           docker run --rm ${{ matrix.platform && format('--platform {0}', matrix.platform) || '' }} -v "$PWD:/w" -v "$JAVA_HOME:/jdk:ro" -e JAVA_HOME=/jdk -w /w '${{ matrix.image }}' sh -c '
             set -e
             if command -v apk >/dev/null; then apk add --no-cache bash build-base cmake git linux-headers ninja; fi
+            if [ "${{ matrix.arch }}" = riscv64 ]; then dnf install -y --enablerepo=crb libstdc++-static || dnf install -y libstdc++-static || true; fi
             git config --global --add safe.directory "*"
             bash scripts/build.sh ${{ matrix.os }} ${{ matrix.arch }} '"$VERSION"'
             chown -R '"$(id -u):$(id -g)"' out

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Lays out/natives/<os>/<arch>/ as out/adhoc-crypto-natives/<rid>/, the folders the other languages look in ( lib/native/<rid>/ ), and zips it.
+# Lays out/natives/<os>/<arch>/ as out/adhoc-crypto/<rid>/, the folders the other languages look in ( lib/native/<rid>/ ), and zips it.
 #
 #   pack.sh
 #
 # The languages other than Java get the library from here. Java gets the jar of jar.sh, with the same files inside.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-OUT=$ROOT/out/adhoc-crypto-natives
+OUT=$ROOT/out/adhoc-crypto
 rm -rf "$OUT" "$OUT.zip"
 for dir in "$ROOT"/out/natives/*/*/; do
   arch=$(basename "$dir")

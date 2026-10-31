@@ -13,7 +13,7 @@ You do not need this repository to use AdHoc: the library comes with the generat
 | File | What it is |
 |:--|:--|
 | `adhoc-crypto.jar` | for Java, in the layout of zstd-jni: `<os>/<arch>/libadhoc-crypto-<version>.<ext>` |
-| `adhoc-crypto-natives.zip` | for the other languages: `<rid>/libadhoc-crypto-<version>.<ext>` |
+| `adhoc-crypto.zip` | for the other languages: `<rid>/libadhoc-crypto-<version>.<ext>` |
 | `SHA256SUMS.txt` | the sums of the two |
 
 | System | Processors |

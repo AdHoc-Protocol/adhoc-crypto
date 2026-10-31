@@ -40,7 +40,8 @@ case $OS in
     strip -x "$OUT/libadhoc-crypto-$VERSION.dylib"
     ;;
   linux | linux-musl | freebsd)
-    cmake -S "$SRC" -B "$WORK/b" "${GEN[@]}" -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+    # -Wno-stringop-overflow: a false alarm of GCC inside BoringSSL on riscv64, and BoringSSL builds with -Werror.
+    cmake -S "$SRC" -B "$WORK/b" "${GEN[@]}" -DCMAKE_POSITION_INDEPENDENT_CODE=ON "-DCMAKE_C_FLAGS=-Wno-stringop-overflow" "-DCMAKE_CXX_FLAGS=-Wno-stringop-overflow"
     cmake --build "$WORK/b" --target ssl crypto
     JNI_OS=${OS%-musl}
     # BoringSSL is C++: its runtime goes inside the library, which then needs only libc, libm and libpthread.

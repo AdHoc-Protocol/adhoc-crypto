@@ -7,7 +7,7 @@ name: release
 #
 # What the builds take from the last release, at stable addresses:
 #   https://github.com/AdHoc-Protocol/adhoc-crypto/releases/latest/download/adhoc-crypto.jar           Java, as zstd-jni
-#   https://github.com/AdHoc-Protocol/adhoc-crypto/releases/latest/download/adhoc-crypto-natives.zip   the other languages, <rid>/libadhoc-crypto-<version>.<ext>
+#   https://github.com/AdHoc-Protocol/adhoc-crypto/releases/latest/download/adhoc-crypto.zip   the other languages, <rid>/libadhoc-crypto-<version>.<ext>
 #   https://github.com/AdHoc-Protocol/adhoc-crypto/releases/latest/download/SHA256SUMS.txt             what changed
 #
 # The platforms of zstd-jni that are not here have no BoringSSL: ppc64, ppc64le, s390x, loongarch64, aix, 32-bit freebsd.
@@ -57,7 +57,7 @@ jobs:
           - { os: linux, arch: arm, runner: ubuntu-24.04-arm, image: 'quay.io/pypa/manylinux_2_31_armv7l', platform: 'linux/arm/v7', test: 'none' }
           - { os: linux, arch: riscv64, runner: ubuntu-24.04, image: 'quay.io/pypa/manylinux_2_39_riscv64', platform: 'linux/riscv64', test: 'none' }
           - { os: win, arch: amd64, runner: windows-latest, test: 'host' }
-          - { os: win, arch: aarch64, runner: windows-11-arm, test: 'host' }
+          - { os: win, arch: aarch64, runner: windows-11-arm, java: 'microsoft', test: 'host' }
           - { os: win, arch: x86, runner: windows-latest, msvc: 'amd64_x86', test: 'none' }
           - { os: darwin, arch: aarch64, runner: macos-latest, test: 'host' }
           - { os: darwin, arch: x86_64, runner: macos-15-intel, test: 'host' }
@@ -68,7 +68,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
-          distribution: temurin
+          distribution: ${{ matrix.java || 'temurin' }}
           java-version: ${{ env.JAVA_VERSION }}
 
       - name: Emulation
@@ -83,6 +83,7 @@ jobs:
             if command -v apk >/dev/null; then apk add --no-cache bash build-base cmake git linux-headers ninja; fi
             git config --global --add safe.directory "*"
             bash scripts/build.sh ${{ matrix.os }} ${{ matrix.arch }} '"$VERSION"'
+            chown -R '"$(id -u):$(id -g)"' out
           '
 
       - name: Build on FreeBSD
@@ -164,13 +165,13 @@ jobs:
       - name: A name that does not change
         run: |
           cp "out/adhoc-crypto-$VERSION.jar" out/adhoc-crypto.jar
-          ( cd out && sha256sum adhoc-crypto.jar adhoc-crypto-natives.zip > SHA256SUMS.txt && cat SHA256SUMS.txt )
+          ( cd out && sha256sum adhoc-crypto.jar adhoc-crypto.zip > SHA256SUMS.txt && cat SHA256SUMS.txt )
       - uses: actions/upload-artifact@v4
         with:
           name: adhoc-crypto
           path: |
             out/adhoc-crypto.jar
-            out/adhoc-crypto-natives.zip
+            out/adhoc-crypto.zip
             out/SHA256SUMS.txt
           retention-days: 30
 
@@ -190,4 +191,4 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           gh release delete native --cleanup-tag --yes || true
-          gh release create native --target "$GITHUB_SHA" --latest --title "native $(date -u +%Y-%m-%d) ${GITHUB_SHA::7}" --notes "BoringSSL latest main, $GITHUB_REF_NAME ${GITHUB_SHA}." adhoc-crypto.jar adhoc-crypto-natives.zip SHA256SUMS.txt
+          gh release create native --target "$GITHUB_SHA" --latest --title "native $(date -u +%Y-%m-%d) ${GITHUB_SHA::7}" --notes "BoringSSL latest main, $GITHUB_REF_NAME ${GITHUB_SHA}." adhoc-crypto.jar adhoc-crypto.zip SHA256SUMS.txt

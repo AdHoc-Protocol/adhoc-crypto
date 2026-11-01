@@ -12,9 +12,18 @@ OUT=${OUT:-$ROOT/out}
 PACK=$OUT/nupkg
 ID=AdHoc.Crypto
 rm -rf "$PACK" "$OUT/$ID".*.nupkg
+FILES=
+# Each file by its name: `runtimes/**` keeps its folder on Windows and drops it on Linux.
+lay() {
+  mkdir -p "$PACK/runtimes/$1/native"
+  for file in "$2"libadhoc-crypto-*; do
+    cp "$file" "$PACK/runtimes/$1/native/"
+    FILES="$FILES    <file src=\"runtimes/$1/native/$(basename "$file")\" target=\"runtimes/$1/native/\" />
+"
+  done
+}
 for dir in "$OUT"/adhoc-crypto/*/; do
-  mkdir -p "$PACK/runtimes/$(basename "$dir")/native"
-  cp "$dir"libadhoc-crypto-* "$PACK/runtimes/$(basename "$dir")/native/"
+  lay "$(basename "$dir")" "$dir"
 done
 for dir in "$OUT"/natives/android/*/; do
   case $(basename "$dir") in
@@ -24,8 +33,7 @@ for dir in "$OUT"/natives/android/*/; do
     x86) rid=android-x86 ;;
     *) echo "unknown abi $dir" >&2; exit 2 ;;
   esac
-  mkdir -p "$PACK/runtimes/$rid/native"
-  cp "$dir"libadhoc-crypto-* "$PACK/runtimes/$rid/native/"
+  lay "$rid" "$dir"
 done
 cp "$ROOT/LICENSE" "$ROOT/NOTICE" "$PACK/"
 cat > "$PACK/$ID.nuspec" <<EOF
@@ -42,8 +50,7 @@ cat > "$PACK/$ID.nuspec" <<EOF
   <files>
     <file src="LICENSE" />
     <file src="NOTICE" />
-    <file src="runtimes/**" />
-  </files>
+$FILES  </files>
 </package>
 EOF
 cat > "$PACK/pack.csproj" <<EOF

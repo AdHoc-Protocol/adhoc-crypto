@@ -4,6 +4,7 @@
 #   pack.sh
 #
 # The languages other than Java get the library from here. Java gets the jar of jar.sh, with the same files inside.
+# Each file also goes out alone as out/adhoc-crypto-<rid>.<ext>: what the build files of C, C++, Python and Rust take from the release.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=$ROOT/out/adhoc-crypto
@@ -27,6 +28,9 @@ for dir in "$ROOT"/out/natives/*/*/; do
   esac
   mkdir -p "$OUT/$o-$a"
   cp "$dir"libadhoc-crypto-* "$OUT/$o-$a/"
+  for file in "$dir"libadhoc-crypto-*; do
+    cp "$file" "$OUT-$o-$a.${file##*.}"
+  done
 done
 "$JAVA_HOME/bin/jar" --create --no-manifest --file "$OUT.zip" -C "$OUT" .
 ls -la "$OUT.zip"

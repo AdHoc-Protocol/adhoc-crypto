@@ -383,7 +383,8 @@ Only `TestAll` is in this repository; the others build with the runtimes and gen
 | `adhoc-crypto.aar` | for Java on Android: `jni/<abi>/libadhoc-crypto-<version>.so` |
 | `adhoc-crypto.zip` | for the other languages: `<rid>/libadhoc-crypto-<version>.<ext>` |
 | `AdHoc.Crypto.nupkg` | for C#: `runtimes/<rid>/native/libadhoc-crypto-<version>.<ext>`, Android too. The generated `Project.csproj` takes it from the address of the latest release, as the generated `pom.xml`, `build.gradle` and `build.sbt` take `adhoc-crypto.jar` |
-| `SHA256SUMS.txt` | the sums of the four |
+| `adhoc-crypto-<rid>.<ext>` | the file of one platform, alone. The generated build files of C, C++, Python and Rust take it; for Swift it is downloaded by hand |
+| `SHA256SUMS.txt` | the sums of the files above |
 
 The release is the only place the library is published in: there are no registries.
 

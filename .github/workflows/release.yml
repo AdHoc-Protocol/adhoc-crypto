@@ -11,11 +11,6 @@ name: release
 #   https://github.com/AdHoc-Protocol/adhoc-crypto/releases/latest/download/AdHoc.Crypto.nupkg  C#, runtimes/<rid>/native/: what Project.csproj takes
 #   https://github.com/AdHoc-Protocol/adhoc-crypto/releases/latest/download/SHA256SUMS.txt             what changed
 #
-# The registries take a push to main, each with its own secrets; with none of them the job is skipped and nothing is published:
-#   nuget.org      NUGET_USER: the name of the account with a policy of Trusted Publishing for this repository and release.yml
-#   Maven Central  MAVEN_CENTRAL_USER, MAVEN_CENTRAL_TOKEN: the user token of the Portal; GPG_PRIVATE_KEY, GPG_PASSPHRASE: what signs
-# A version there is never replaced: <VERSION>.<number of the run>, and it stays for good.
-#
 # The platforms of zstd-jni that are not here have no BoringSSL: ppc64, ppc64le, s390x, loongarch64, aix, 32-bit freebsd.
 # BoringSSL is the latest main at every run: versions are not pinned. The version of the library is VERSION: the languages name the file by it.
 
@@ -188,7 +183,7 @@ jobs:
       - name: A name that does not change
         run: |
           cp "out/adhoc-crypto-$VERSION.jar" out/adhoc-crypto.jar
-          cp out/AdHoc.Crypto.*.nupkg out/AdHoc.Crypto.nupkg
+          mv out/AdHoc.Crypto.*.nupkg out/AdHoc.Crypto.nupkg
           ( cd out && sha256sum adhoc-crypto.jar adhoc-crypto.aar adhoc-crypto.zip AdHoc.Crypto.nupkg > SHA256SUMS.txt && cat SHA256SUMS.txt )
       - uses: actions/upload-artifact@v7
         with:
@@ -197,7 +192,6 @@ jobs:
             out/adhoc-crypto.jar
             out/adhoc-crypto.aar
             out/adhoc-crypto.zip
-            out/AdHoc.Crypto.*.nupkg
             out/AdHoc.Crypto.nupkg
             out/SHA256SUMS.txt
           retention-days: 30
@@ -219,84 +213,3 @@ jobs:
         run: |
           gh release delete native --cleanup-tag --yes || true
           gh release create native --target "$GITHUB_SHA" --latest --title "native $(date -u +%Y-%m-%d) ${GITHUB_SHA::7}" --notes "BoringSSL latest main, $GITHUB_REF_NAME ${GITHUB_SHA}." adhoc-crypto.jar adhoc-crypto.aar adhoc-crypto.zip AdHoc.Crypto.nupkg SHA256SUMS.txt
-
-  registries:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    needs: jar
-    runs-on: ubuntu-latest
-    outputs:
-      nuget: ${{ steps.have.outputs.nuget }}
-      maven: ${{ steps.have.outputs.maven }}
-    steps:
-      - id: have
-        env:
-          NUGET_USER: ${{ secrets.NUGET_USER }}
-          MAVEN_CENTRAL_USER: ${{ secrets.MAVEN_CENTRAL_USER }}
-          MAVEN_CENTRAL_TOKEN: ${{ secrets.MAVEN_CENTRAL_TOKEN }}
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: |
-          echo "nuget=$([ -n "$NUGET_USER" ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
-          echo "maven=$([ -n "$MAVEN_CENTRAL_USER" ] && [ -n "$MAVEN_CENTRAL_TOKEN" ] && [ -n "$GPG_PRIVATE_KEY" ] && [ -n "$GPG_PASSPHRASE" ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
-
-  nuget:
-    needs: registries
-    if: needs.registries.outputs.nuget == 'yes'
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write # the short-lived key of Trusted Publishing
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: adhoc-crypto
-      - id: login
-        uses: NuGet/login@v1
-        with:
-          user: ${{ secrets.NUGET_USER }}
-      - run: dotnet nuget push AdHoc.Crypto.[0-9]*.nupkg --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
-
-  maven:
-    needs: [version, registries]
-    if: needs.registries.outputs.maven == 'yes'
-    runs-on: ubuntu-latest
-    env:
-      VERSION: ${{ needs.version.outputs.version }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
-      - uses: actions/download-artifact@v8
-        with:
-          name: adhoc-crypto
-          path: out
-      - name: The bundle, signed
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: |
-          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
-          cp out/adhoc-crypto.jar "out/adhoc-crypto-$VERSION.jar"
-          bash scripts/maven.sh "$VERSION" "$GITHUB_RUN_NUMBER"
-      - name: Upload and wait for the verdict of the Portal
-        env:
-          MAVEN_CENTRAL_USER: ${{ secrets.MAVEN_CENTRAL_USER }}
-          MAVEN_CENTRAL_TOKEN: ${{ secrets.MAVEN_CENTRAL_TOKEN }}
-        run: |
-          AUTH="Authorization: Bearer $(printf '%s:%s' "$MAVEN_CENTRAL_USER" "$MAVEN_CENTRAL_TOKEN" | base64 -w0)"
-          BUNDLE="out/adhoc-crypto-$VERSION.$GITHUB_RUN_NUMBER-bundle.zip"
-          ID=$(curl -fsS -H "$AUTH" -F "bundle=@$BUNDLE;type=application/octet-stream" "https://central.sonatype.com/api/v1/publisher/upload?publishingType=AUTOMATIC")
-          echo "deployment $ID"
-          for attempt in $(seq 1 90); do
-            sleep 20
-            STATUS=$(curl -fsS -X POST -H "$AUTH" "https://central.sonatype.com/api/v1/publisher/status?id=$ID")
-            STATE=$(jq -r .deploymentState <<< "$STATUS")
-            echo "$STATE"
-            case $STATE in
-              PUBLISHED | PUBLISHING) exit 0 ;;
-              FAILED) jq . <<< "$STATUS"; exit 1 ;;
-            esac
-          done
-          echo "no verdict of the Portal in 30 minutes: deployment $ID" >&2
-          exit 1

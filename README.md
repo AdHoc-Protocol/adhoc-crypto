@@ -385,7 +385,7 @@ Only `TestAll` is in this repository; the others build with the runtimes and gen
 | `AdHoc.Crypto.nupkg` | for C#: `runtimes/<rid>/native/libadhoc-crypto-<version>.<ext>`, Android too. The generated `Project.csproj` takes it from the address of the latest release, as the generated `pom.xml`, `build.gradle` and `build.sbt` take `adhoc-crypto.jar` |
 | `SHA256SUMS.txt` | the sums of the four |
 
-A push to `main` also publishes, each registry when its secrets are set, as `<VERSION>.<number of the run>`: `AdHoc.Crypto` on nuget.org ( `NUGET_USER`, Trusted Publishing ), `org.unirail:adhoc-crypto` on Maven Central ( `MAVEN_CENTRAL_USER`, `MAVEN_CENTRAL_TOKEN`, `GPG_PRIVATE_KEY`, `GPG_PASSPHRASE` ). Without them the jobs are skipped.
+The release is the only place the library is published in: there are no registries.
 
 | System | Built and tested | Only built |
 |:--|:--|:--|

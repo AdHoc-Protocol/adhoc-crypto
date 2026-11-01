@@ -229,7 +229,7 @@ What differs from Java because of the platform:
 | Buffers | ordinary `byte[]` from `ArrayPool`, held by `fixed` for the call. So the addresses in the transmit queue are kept as offsets and turned into pointers just before the call |
 | Cipher contexts, chain memory, Noise | native memory that does not move: a context must not move |
 | Two directions | transmit and receive run on different threads. The TLS handshake is shared under a lock; the data shares nothing, the keys of each direction are separate |
-| Finding the library | `ADHOC_CRYPTO_NATIVE`, next to the program, `runtimes/<rid>/native`, `lib/native/<rid>` next to the source |
+| Finding the library | `ADHOC_CRYPTO_NATIVE`, next to the program, then the folder of this platform in the package `AdHoc.Crypto`, from `<program>.deps.json` |
 | The pool of `Link` | one for the process; in Java, one per loop |
 
 ### The other languages
@@ -382,7 +382,10 @@ Only `TestAll` is in this repository; the others build with the runtimes and gen
 | `adhoc-crypto.jar` | for Java, in the layout of zstd-jni: `<os>/<arch>/libadhoc-crypto-<version>.<ext>` |
 | `adhoc-crypto.aar` | for Java on Android: `jni/<abi>/libadhoc-crypto-<version>.so` |
 | `adhoc-crypto.zip` | for the other languages: `<rid>/libadhoc-crypto-<version>.<ext>` |
-| `SHA256SUMS.txt` | the sums of the three |
+| `AdHoc.Crypto.<version>.<run>.nupkg` | for C#: `runtimes/<rid>/native/libadhoc-crypto-<version>.<ext>`, Android too |
+| `SHA256SUMS.txt` | the sums of the four |
+
+A push to `main` also publishes, each registry when its secrets are set, as `<VERSION>.<number of the run>`: `AdHoc.Crypto` on nuget.org ( `NUGET_USER`, Trusted Publishing ), `org.unirail:adhoc-crypto` on Maven Central ( `MAVEN_CENTRAL_USER`, `MAVEN_CENTRAL_TOKEN`, `GPG_PRIVATE_KEY`, `GPG_PASSPHRASE` ). Without them the jobs are skipped.
 
 | System | Built and tested | Only built |
 |:--|:--|:--|

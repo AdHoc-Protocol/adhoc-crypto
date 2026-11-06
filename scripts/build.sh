@@ -41,10 +41,11 @@ case $OS in
     ;;
   ios | iossimulator)
     # A dynamic library named as the binary of adhoc_crypto.framework: an app of iOS carries a library only in a framework ( xcframework.sh ).
-    # One architecture a build: BoringSSL takes no two at once.
+    # One architecture a build: BoringSSL takes no two at once. CMAKE_MACOSX_BUNDLE=OFF: on iOS an executable is a bundle by default,
+    # and the tool bssl of BoringSSL - not built here - then has no place to be installed in.
     SDK=iphoneos TARGET=$ARCH-apple-ios13.0
     [ "$OS" = iossimulator ] && SDK=iphonesimulator TARGET=$ARCH-apple-ios13.0-simulator
-    cmake -S "$SRC" -B "$WORK/b" "${GEN[@]}" -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=$SDK -DCMAKE_OSX_ARCHITECTURES=$ARCH -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+    cmake -S "$SRC" -B "$WORK/b" "${GEN[@]}" -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=$SDK -DCMAKE_OSX_ARCHITECTURES=$ARCH -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 -DCMAKE_MACOSX_BUNDLE=OFF
     cmake --build "$WORK/b" --target ssl crypto
     clang -O2 -dynamiclib -fvisibility=hidden -target "$TARGET" -isysroot "$(xcrun --sdk $SDK --show-sdk-path)" -I"$SRC/include" -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/darwin" "$ROOT/src/adhoc_crypto.c" "$WORK/b/libssl.a" "$WORK/b/libcrypto.a" -lc++ -Wl,-dead_strip -install_name @rpath/adhoc_crypto.framework/adhoc_crypto -o "$OUT/libadhoc-crypto-$VERSION.dylib"
     strip -x "$OUT/libadhoc-crypto-$VERSION.dylib"

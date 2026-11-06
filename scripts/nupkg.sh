@@ -26,6 +26,7 @@ for dir in "$OUT"/adhoc-crypto/*/; do
   lay "$(basename "$dir")" "$dir"
 done
 for dir in "$OUT"/natives/android/*/; do
+  [ -d "$dir" ] || continue # a local build has no Android
   case $(basename "$dir") in
     arm64-v8a) rid=android-arm64 ;;
     armeabi-v7a) rid=android-arm ;;

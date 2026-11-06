@@ -1009,11 +1009,27 @@ CRYPTO(void, ed25519KeyPair)(JNIEnv *env, jclass cls, jbyteArray secret, jbyteAr
     OPENSSL_cleanse(s, sizeof s);
 }
 
+// Ed25519ph of RFC 8032 §5.1, with no context: the message goes through SHA-512 once, the signature is of its digest. Pure
+// Ed25519 reads the message twice, so a pack can be signed only once it lies whole; the digest grows as its bytes come.
+static int ed25519ph_sign(uint8_t out[64], const uint8_t *message, size_t len, const uint8_t secret[64])
+{
+    uint8_t digest[64];
+    SHA512(message, len, digest);
+    return ED25519_sign_prehashed(out, NULL, 0, digest, secret);
+}
+
+static int ed25519ph_verify(const uint8_t *message, size_t len, const uint8_t signature[64], const uint8_t pub[32])
+{
+    uint8_t digest[64];
+    SHA512(message, len, digest);
+    return ED25519_verify_prehashed(NULL, 0, digest, signature, pub);
+}
+
 CRYPTO(jboolean, ed25519Sign)(JNIEnv *env, jclass cls, jbyteArray signature, jbyteArray secret, jlong message, jlong len)
 {
     uint8_t out[64], s[64];
     (*env)->GetByteArrayRegion(env, secret, 0, 64, (jbyte *)s);
-    const int ok = ED25519_sign(out, ADDR(const uint8_t, message), (size_t)len, s);
+    const int ok = ed25519ph_sign(out, ADDR(const uint8_t, message), (size_t)len, s);
     OPENSSL_cleanse(s, sizeof s);
     (*env)->SetByteArrayRegion(env, signature, 0, 64, (const jbyte *)out);
     return ok ? JNI_TRUE : JNI_FALSE;
@@ -1024,7 +1040,7 @@ CRYPTO(jboolean, ed25519Verify)(JNIEnv *env, jclass cls, jbyteArray signature, j
     uint8_t sig[64], p[32];
     (*env)->GetByteArrayRegion(env, signature, 0, 64, (jbyte *)sig);
     (*env)->GetByteArrayRegion(env, pub, 0, 32, (jbyte *)p);
-    return ED25519_verify(ADDR(const uint8_t, message), (size_t)len, sig, p) ? JNI_TRUE : JNI_FALSE;
+    return ed25519ph_verify(ADDR(const uint8_t, message), (size_t)len, sig, p) ? JNI_TRUE : JNI_FALSE;
 }
 
 // E6: the key of a pair. Both sides get the same from their own secret and the other's public key: the DH through HKDF, the
@@ -1875,7 +1891,7 @@ CRYPTO(jint, packSeal)(JNIEnv *env, jclass cls, jlong ctx, jlong n, jlong secret
     size_t all = (size_t)len;
     if (secret != 0)
     {
-        if (!ED25519_sign(text + len, text, (size_t)len, ADDR(const uint8_t, secret)))
+        if (!ed25519ph_sign(text + len, text, (size_t)len, ADDR(const uint8_t, secret)))
             return -1;
         all += 64;
     }
@@ -1904,7 +1920,7 @@ CRYPTO(jint, packOpen)(JNIEnv *env, jclass cls, jlong ctx, jlong n, jlong pub, j
         if (all < 64)
             return -1;
         all -= 64;
-        if (!ED25519_verify(text, all, text + all, ADDR(const uint8_t, pub)))
+        if (!ed25519ph_verify(text, all, text + all, ADDR(const uint8_t, pub)))
             return -1;
     }
     return (jint)all;
@@ -2011,9 +2027,9 @@ ADHOC(void, ed25519_keypair)(uint8_t *secret, uint8_t *pub, const uint8_t *seed)
         ED25519_keypair(pub, secret);
 }
 
-ADHOC(jint, ed25519_sign)(uint8_t *signature, const uint8_t *secret, const uint8_t *message, jlong len) { return ED25519_sign(signature, message, (size_t)len, secret); }
+ADHOC(jint, ed25519_sign)(uint8_t *signature, const uint8_t *secret, const uint8_t *message, jlong len) { return ed25519ph_sign(signature, message, (size_t)len, secret); }
 
-ADHOC(jint, ed25519_verify)(const uint8_t *signature, const uint8_t *pub, const uint8_t *message, jlong len) { return ED25519_verify(message, (size_t)len, signature, pub); }
+ADHOC(jint, ed25519_verify)(const uint8_t *signature, const uint8_t *pub, const uint8_t *message, jlong len) { return ed25519ph_verify(message, (size_t)len, signature, pub); }
 
 ADHOC(jint, pair_key)(uint8_t *key, uint8_t *iv, int32_t *id, const uint8_t *secret, const uint8_t *their, const uint8_t *label, jint label_len) { return pair_key(key, iv, id, secret, their, label, (size_t)label_len); }
 

@@ -45,7 +45,7 @@ What the library is for:
 | **Noise** NK, IK, XX, KK | handshake in one call per message, then the session keys | encryption pinned by key, with no certificate authority | `Chain`, `Noise` |
 | **TLS 1.3** client and server | the handshake is BoringSSL's, records are sealed in place in your buffer; KeyUpdate, `close_notify` | browsers, standard clients, port 443, certificates | `Chain.tls`, `tlsServer` |
 | **The chain** | TLS, WebSocket frames and Noise in one call per buffer | every connection with a chain | `Chain` |
-| **Ed25519 and sealed packs** | signs and seals one buffer in one call, with no connection | a message that is stored, or goes through hosts that must not read it | `Chain.Pack` |
+| **Ed25519ph and sealed packs** | signs and seals one buffer in one call, with no connection | a message that is stored, or goes through hosts that must not read it | `Chain.Pack` |
 | **SHA-256, HMAC-SHA-256, Poly1305, random** | the building blocks | keys and helpers | `Crypto` |
 
 Root certificates are not here: the language supplies a function of trust (the JDK's roots, the system's roots in C#, on Windows through crypt32 in the others).
@@ -176,7 +176,7 @@ server.handshakeTimeout = 10_000;                                     // 30 s by
 | `connect(chain, address or uri, timeout, callback)`, `connect(address or uri, timeout, serverKey, callback)`, `connectTls(address, name, alpn, timeout, serverKey, callback)` | the clients, `Network.TCP.Client` and `Network.TCP.WebSocket.Client` |
 | `external.noise.peerKey` | the proved key after the handshake |
 
-A pack on its own; `pair` seals (X25519, then ChaCha20-Poly1305), `signedBy` and `signerOf` sign and check (Ed25519), and either may be left out:
+A pack on its own; `pair` seals (X25519, then ChaCha20-Poly1305), `signedBy` and `signerOf` sign and check (Ed25519ph of RFC 8032 §5.1, no context: the SHA-512 of the text is signed, so the text is read once), and either may be left out:
 
 ```java
 final var out = new Chain.Pack().pair(mySecret, theirPublic, "envelope").signedBy(signingSecret);
@@ -240,7 +240,7 @@ What differs from Java because of the platform:
 | Python | a layer over the C runtime: `TCP.Chain`, `chain=`, `choose_chain=` |
 | Dart | on `dart:io` the same through `dart:ffi`. In a browser, for UDP and for stages, its own ciphers in Dart |
 | Go | does not use it, decided by measurement: `crypto/tls`, `crypto/ecdh`, `x/crypto`. Equal on ChaCha, and cgo breaks cross-compiling. The price: two more copies, the private buffer of `crypto/tls`, no pieces |
-| TypeScript | TLS is the platform's. Noise and Ed25519 on its own WebAssembly |
+| TypeScript | TLS is the platform's. Noise and Ed25519ph on its own WebAssembly |
 
 The bytes on the wire are the same everywhere: a client in one language connects to a server in any other.
 
@@ -354,7 +354,7 @@ With no Noise, sends go in 64-byte portions, so the 64-byte figures say nothing 
 | Check | What it covers |
 |:--|:--|
 | `test/TestAll`, on every tested platform at each push | records, a JDK server with KeyUpdate, OpenSSL when given, certificates; with `online`: Cloudflare, Google, GitHub, wss |
-| Noise vectors | the published cacophony vectors for NK, IK, XX, KK; Ed25519 by RFC 8032 |
+| Noise vectors | the published cacophony vectors for NK, IK, XX, KK; Ed25519ph by RFC 8032 |
 | Golden output | RFC 7748, RFC 8439, NK messages, pack keys, stages: byte for byte the output of the old Java code |
 | Exchange, Java and C# | every chain both ways with the bytes compared; frames of 3, 700 and 20000 bytes in one write; PING in the middle of a record; a stream byte by byte; a flipped byte must close; a refusal by `onPeer` |
 | Generated code over real sockets | ResumableTest, ArraysTest, GroupRpc, Stream: 120 runs, 24 connections, buffers from 256 bytes, no transfer errors. ResumableTest compared its sample file byte for byte on all 28 runs |
@@ -371,7 +371,7 @@ Only `TestAll` is in this repository; the others build with the runtimes and gen
 - **`Chain.Pack` is not wired to attributes:** you call it from your code; `[AEAD]` and `[Signed]` do not exist.
 - **Under a chain, not everything has been run live.** Multiplex between Java and C#, 24 of 24; tunnels and the Resumable journal on TypeScript on Node only. Noise under UDP is its own, per datagram.
 - **Java to C# over a real socket** was run in the matrix of chains; values between languages are not compared, as each language generates its own expected ones. Integrity there rests on the authentication of Noise and TLS and on the set of packs.
-- **Rust, C, C++, Swift and Dart read the roots of the system on Windows only:** elsewhere a client without a function of trust refuses every server.
+- **Rust, C, C++ and Swift read the roots of the system on Windows only:** elsewhere a client without a function of trust refuses every server. Dart reads them on macOS and Linux too.
 
 ## What a push to `main` does
 

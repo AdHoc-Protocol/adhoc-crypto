@@ -2,7 +2,7 @@
 # Builds out/natives/<os>/<arch>/libadhoc-crypto-<version>.<ext> for the platform it runs on: BoringSSL, statically, and the
 # JNI code around it. In gen/ BoringSSL has its assembly ready, so neither Perl nor Go is needed; on Windows x86-64 NASM is.
 #
-#   build.sh <os> <arch> <version>      os: win, linux, linux-musl, darwin, freebsd, android; arch: amd64, aarch64, x86_64, x86, i386, arm, riscv64; on android its ABI
+#   build.sh <os> <arch> <version>      os: win, linux, linux-musl, darwin, freebsd, android, ios, iossimulator; arch: amd64, aarch64, x86_64, x86, i386, arm, riscv64; on android its ABI; on ios arm64, on iossimulator arm64 or x86_64
 #
 # JAVA_HOME gives jni.h. BORINGSSL names a checkout to use; without it the latest main is cloned: versions are not pinned.
 # On Windows run it from a shell with vcvars64 applied, clang-cl, cmake, ninja and nasm on PATH.
@@ -37,6 +37,16 @@ case $OS in
     cmake -S "$SRC" -B "$WORK/b" "${GEN[@]}" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
     cmake --build "$WORK/b" --target ssl crypto
     clang -O2 -dynamiclib -fvisibility=hidden -mmacosx-version-min=11.0 -I"$SRC/include" -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/darwin" "$ROOT/src/adhoc_crypto.c" "$WORK/b/libssl.a" "$WORK/b/libcrypto.a" -lc++ -Wl,-dead_strip -o "$OUT/libadhoc-crypto-$VERSION.dylib"
+    strip -x "$OUT/libadhoc-crypto-$VERSION.dylib"
+    ;;
+  ios | iossimulator)
+    # A dynamic library named as the binary of adhoc_crypto.framework: an app of iOS carries a library only in a framework ( xcframework.sh ).
+    # One architecture a build: BoringSSL takes no two at once.
+    SDK=iphoneos TARGET=$ARCH-apple-ios13.0
+    [ "$OS" = iossimulator ] && SDK=iphonesimulator TARGET=$ARCH-apple-ios13.0-simulator
+    cmake -S "$SRC" -B "$WORK/b" "${GEN[@]}" -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=$SDK -DCMAKE_OSX_ARCHITECTURES=$ARCH -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+    cmake --build "$WORK/b" --target ssl crypto
+    clang -O2 -dynamiclib -fvisibility=hidden -target "$TARGET" -isysroot "$(xcrun --sdk $SDK --show-sdk-path)" -I"$SRC/include" -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/darwin" "$ROOT/src/adhoc_crypto.c" "$WORK/b/libssl.a" "$WORK/b/libcrypto.a" -lc++ -Wl,-dead_strip -install_name @rpath/adhoc_crypto.framework/adhoc_crypto -o "$OUT/libadhoc-crypto-$VERSION.dylib"
     strip -x "$OUT/libadhoc-crypto-$VERSION.dylib"
     ;;
   linux | linux-musl | freebsd)

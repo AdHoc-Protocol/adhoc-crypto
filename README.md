@@ -383,7 +383,8 @@ Only `TestAll` is in this repository; the others build with the runtimes and gen
 | `adhoc-crypto.aar` | for Java on Android: `jni/<abi>/libadhoc-crypto-<version>.so` |
 | `adhoc-crypto.zip` | for the other languages: `<rid>/libadhoc-crypto-<version>.<ext>` |
 | `AdHoc.Crypto.nupkg` | for C#: `runtimes/<rid>/native/libadhoc-crypto-<version>.<ext>`, Android too. The generated `Project.csproj` takes it from the address of the latest release, as the generated `pom.xml`, `build.gradle` and `build.sbt` take `adhoc-crypto.jar` |
-| `adhoc-crypto-<rid>.<ext>` | the file of one platform, alone. The generated build files of C, C++, Python and Rust take it; for Swift it is downloaded by hand |
+| `adhoc-crypto-<rid>.<ext>` | the file of one platform, alone. The generated build files of C, C++, Python and Rust take it, the build hook of Dart too ( Android: `android-<arm64\|arm\|x64\|x86>.so`; iOS: `ios-arm64.dylib`, `iossimulator-arm64.dylib`, `iossimulator-x64.dylib` ); for Swift it is downloaded by hand |
+| `adhoc-crypto.xcframework.zip` | for an app of iOS: `adhoc_crypto.framework` for the device and for the simulator. Add it to the target in Xcode, Embed & Sign; the Swift lib opens `@rpath/adhoc_crypto.framework/adhoc_crypto` |
 | `SHA256SUMS.txt` | the sums of the files above |
 
 The release is the only place the library is published in: there are no registries.
@@ -396,6 +397,7 @@ The release is the only place the library is published in: there are no registri
 | macOS | x64, arm64 | |
 | FreeBSD | | x64 |
 | Android, API 24, 16 KB pages | | arm64-v8a, armeabi-v7a, x86_64, x86 |
+| iOS 13 | | arm64; simulator arm64, x64 |
 
 The platforms of zstd-jni that are not here have no BoringSSL: ppc64, ppc64le, s390x, loongarch64, aix, 32-bit FreeBSD.
 

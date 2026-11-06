@@ -9,7 +9,8 @@ name: release
 #   https://github.com/AdHoc-Protocol/adhoc-crypto/releases/latest/download/adhoc-crypto.jar           Java, as zstd-jni
 #   https://github.com/AdHoc-Protocol/adhoc-crypto/releases/latest/download/adhoc-crypto.zip   the other languages, <rid>/libadhoc-crypto-<version>.<ext>
 #   https://github.com/AdHoc-Protocol/adhoc-crypto/releases/latest/download/AdHoc.Crypto.nupkg  C#, runtimes/<rid>/native/: what Project.csproj takes
-#   https://github.com/AdHoc-Protocol/adhoc-crypto/releases/latest/download/adhoc-crypto-<rid>.<ext>   C, C++, Python, Rust and Swift: the file of one platform
+#   https://github.com/AdHoc-Protocol/adhoc-crypto/releases/latest/download/adhoc-crypto-<rid>.<ext>   C, C++, Python, Rust, Swift and Dart: the file of one platform
+#   https://github.com/AdHoc-Protocol/adhoc-crypto/releases/latest/download/adhoc-crypto.xcframework.zip   an app of iOS: the device and the simulator
 #   https://github.com/AdHoc-Protocol/adhoc-crypto/releases/latest/download/SHA256SUMS.txt             what changed
 #
 # The platforms of zstd-jni that are not here have no BoringSSL: ppc64, ppc64le, s390x, loongarch64, aix, 32-bit freebsd.
@@ -155,8 +156,36 @@ jobs:
           path: out/natives
           retention-days: 7
 
+  # iOS: the device and the two simulators in one job, since the xcframework holds them all. Only built: no app to load it in.
+  # jni.h of the JDK only to compile: Java does not run on iOS.
+  ios:
+    needs: version
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: Build for iOS and its simulator
+        run: |
+          brew install ninja
+          bash scripts/build.sh ios arm64 "$VERSION"
+          bash scripts/build.sh iossimulator arm64 "$VERSION"
+          bash scripts/build.sh iossimulator x86_64 "$VERSION"
+          bash scripts/xcframework.sh "$VERSION"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ios
+          path: |
+            out/adhoc-crypto.xcframework.zip
+            out/adhoc-crypto-ios*.dylib
+          retention-days: 7
+
   jar:
-    needs: [version, build]
+    needs: [version, build, ios]
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.version.outputs.version }}
@@ -171,6 +200,10 @@ jobs:
           path: out/natives
           pattern: native-*
           merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: ios
+          path: out
       - name: The jar of all the platforms
         run: bash scripts/jar.sh "$VERSION"
       - name: It loads and works from the jar
@@ -185,7 +218,7 @@ jobs:
         run: |
           cp "out/adhoc-crypto-$VERSION.jar" out/adhoc-crypto.jar
           mv out/AdHoc.Crypto.*.nupkg out/AdHoc.Crypto.nupkg
-          ( cd out && sha256sum adhoc-crypto.jar adhoc-crypto.aar adhoc-crypto.zip AdHoc.Crypto.nupkg adhoc-crypto-*-*.* > SHA256SUMS.txt && cat SHA256SUMS.txt )
+          ( cd out && sha256sum adhoc-crypto.jar adhoc-crypto.aar adhoc-crypto.zip adhoc-crypto.xcframework.zip AdHoc.Crypto.nupkg adhoc-crypto-*-*.* > SHA256SUMS.txt && cat SHA256SUMS.txt )
       - uses: actions/upload-artifact@v7
         with:
           name: adhoc-crypto
@@ -193,6 +226,7 @@ jobs:
             out/adhoc-crypto.jar
             out/adhoc-crypto.aar
             out/adhoc-crypto.zip
+            out/adhoc-crypto.xcframework.zip
             out/AdHoc.Crypto.nupkg
             out/adhoc-crypto-*-*.*
             out/SHA256SUMS.txt
@@ -214,4 +248,4 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           gh release delete native --cleanup-tag --yes || true
-          gh release create native --target "$GITHUB_SHA" --latest --title "native $(date -u +%Y-%m-%d) ${GITHUB_SHA::7}" --notes "BoringSSL latest main, $GITHUB_REF_NAME ${GITHUB_SHA}." adhoc-crypto.jar adhoc-crypto.aar adhoc-crypto.zip AdHoc.Crypto.nupkg adhoc-crypto-*-*.* SHA256SUMS.txt
+          gh release create native --target "$GITHUB_SHA" --latest --title "native $(date -u +%Y-%m-%d) ${GITHUB_SHA::7}" --notes "BoringSSL latest main, $GITHUB_REF_NAME ${GITHUB_SHA}." adhoc-crypto.jar adhoc-crypto.aar adhoc-crypto.zip adhoc-crypto.xcframework.zip AdHoc.Crypto.nupkg adhoc-crypto-*-*.* SHA256SUMS.txt

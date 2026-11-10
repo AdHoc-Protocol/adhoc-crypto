@@ -1952,7 +1952,11 @@ typedef struct
     int32_t env_id, keys;                // 64, 68: the id of the pair's key; the keys in `ring`
     StageKey ring[MAX_KEYS];             // 72: ChaCha20 - a stream's own key and nonce, or the keys of the session, the newest first
     int64_t seq;                         // 264: tx - the sequence of the nonce of a pack's ChaCha20
-    uint8_t *buf;                        // 272: the staging: what Java writes ( tx ) or reads ( rx )
+    union
+    {
+        uint8_t *buf;                    // 272: the staging: what Java writes ( tx ) or reads ( rx )
+        int64_t buf_slot;                // 8 bytes on every platform: a 32-bit pointer takes the low half, the layout stays
+    };
     int32_t cap, gen;                    // 280, 284: its room; bumped when it moved - Java takes it again
     int32_t len, at;                     // 288, 292: tx - plaintext Java wrote up to `len`, the stages took it up to `at`; rx - plaintext from `at` to `len`
     int32_t done, taken;                 // 296, 300: tx - bytes written to the output by the last call; rx - input bytes the last call took
@@ -1969,7 +1973,7 @@ typedef struct
     size_t env_len, env_cap, env_at;
 } Stages;
 
-_Static_assert(offsetof(Stages, ring) == 72 && offsetof(Stages, seq) == 264 && offsetof(Stages, buf) == 272 && offsetof(Stages, phase) == 308 && offsetof(Stages, need) == 316 && sizeof(StageKey) == 48, "the layout Stages.java knows");
+_Static_assert(offsetof(Stages, ring) == 72 && offsetof(Stages, seq) == 264 && offsetof(Stages, buf) == 272 && offsetof(Stages, cap) == 280 && offsetof(Stages, phase) == 308 && offsetof(Stages, need) == 316 && sizeof(StageKey) == 48, "the layout Stages.java knows");
 
 static int stages_has(const Stages *s, int kind)
 {

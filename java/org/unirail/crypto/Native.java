@@ -20,7 +20,7 @@ final class Native
     private static boolean loaded;
 
     /** What this code expects of the native library. */
-    private static final int ABI = 9;
+    private static final int ABI = 10;
 
     private static native int abi();
 

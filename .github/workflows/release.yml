@@ -1,6 +1,6 @@
 name: release
 
-# adhoc-crypto: BoringSSL and the code of src/, for every platform BoringSSL builds for, in the layout of zstd-jni.
+# adhoc-crypto: BoringSSL, zstd and the code of src/, for every platform BoringSSL builds for, in the layout of zstd-jni.
 #
 #   every push                           builds and tests the platforms, and replaces the release `native`
 #   a pull request                       builds and tests, publishes nothing

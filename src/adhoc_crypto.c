@@ -21,6 +21,7 @@
 #include <openssl/pool.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
+#include "zstd.h"
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 #include <openssl/x509.h>
@@ -762,7 +763,7 @@ FN(void, free)(JNIEnv *env, jclass cls, jlong conn)
 #define CRYPTO(ret, name) JNIEXPORT ret JNICALL Java_org_unirail_crypto_Crypto_##name
 #define ADDR(type, x) ((type *)(intptr_t)(x))
 
-JNIEXPORT jint JNICALL Java_org_unirail_crypto_Native_abi(JNIEnv *env, jclass cls) { return 9; }
+JNIEXPORT jint JNICALL Java_org_unirail_crypto_Native_abi(JNIEnv *env, jclass cls) { return 10; }
 
 CRYPTO(jlong, address0)(JNIEnv *env, jclass cls, jobject direct) { return (jlong)(intptr_t)(*env)->GetDirectBufferAddress(env, direct); }
 
@@ -1927,6 +1928,447 @@ CRYPTO(jint, packOpen)(JNIEnv *env, jclass cls, jlong ctx, jlong n, jlong pub, j
 }
 //#endregion
 
+//#region The stages of a stream: what the generated chain of a pack, a field or a connection has of Zstd, ChaCha20 and an Envelope runs
+// here, in one call a buffer each way. Java and C# write what is chosen where it lies - the stages, their keys - and read what came of a
+// call the same way: the offsets are in Stages.java and Stages.cs. A lone ChaCha20 needs no copy: its plaintext is ciphered where it lies,
+// in the buffer of the socket ( stages_xor ). With Zstd or an Envelope the plaintext goes through the staging of the chain.
+enum { ST_ZSTD = 1, ST_CHACHA = 2, ST_CHACHA_PACK = 3, ST_ENVELOPE = 4, MAX_STAGES = 4, MAX_KEYS = 4, STAGE_HEADER = 12 };
+enum { SF_START = 0, SF_RUN = 1, SF_EMIT = 2, SF_FLUSH = 3 };
+
+typedef struct
+{
+    int32_t id;
+    uint8_t key[32], iv[12];
+} StageKey;
+
+// Java and C# read and write these where they lie, with no call.
+typedef struct
+{
+    int32_t count, tx;                   // 0, 4: the stages, leaf first; 1 - this side transmits
+    int32_t kind[MAX_STAGES];            // 8
+    int32_t level[MAX_STAGES];           // 24: of Zstd
+    int64_t env_ctx, env_key, env_n;     // 40, 48, 56: an Envelope: the AEAD context of the pair ( 0 - not sealed ); the signing secret
+                                         // ( tx ) or the signer's public key ( rx ), 0 - not signed; the number of the pack ( tx )
+    int32_t env_id, keys;                // 64, 68: the id of the pair's key; the keys in `ring`
+    StageKey ring[MAX_KEYS];             // 72: ChaCha20 - a stream's own key and nonce, or the keys of the session, the newest first
+    int64_t seq;                         // 264: tx - the sequence of the nonce of a pack's ChaCha20
+    uint8_t *buf;                        // 272: the staging: what Java writes ( tx ) or reads ( rx )
+    int32_t cap, gen;                    // 280, 284: its room; bumped when it moved - Java takes it again
+    int32_t len, at;                     // 288, 292: tx - plaintext Java wrote up to `len`, the stages took it up to `at`; rx - plaintext from `at` to `len`
+    int32_t done, taken;                 // 296, 300: tx - bytes written to the output by the last call; rx - input bytes the last call took
+    int32_t open, phase;                 // 304, 308: rx - bytes at the front of the next offer deciphered already; where the stream is ( SF_ )
+    int32_t ext, need;                   // 312, 316: 1 - the runtime owns the staging ( C#: a pinned array ), nothing here moves or frees
+                                         // it; the room a call wanted when it gave -3
+    // the library's own from here
+    Stream ks;
+    ZSTD_CCtx *cz;
+    ZSTD_DCtx *dz;
+    uint8_t hdr[STAGE_HEADER];
+    int32_t hdr_n;                       // tx: header bytes written; rx: header bytes read
+    uint8_t *env;                        // the bytes of an Envelope after Zstd: compressed, sealed in place
+    size_t env_len, env_cap, env_at;
+} Stages;
+
+_Static_assert(offsetof(Stages, ring) == 72 && offsetof(Stages, seq) == 264 && offsetof(Stages, buf) == 272 && offsetof(Stages, phase) == 308 && offsetof(Stages, need) == 316 && sizeof(StageKey) == 48, "the layout Stages.java knows");
+
+static int stages_has(const Stages *s, int kind)
+{
+    for (int i = 0; i < s->count; i++)
+        if (s->kind[i] == kind)
+            return i;
+    return -1;
+}
+
+static int stages_cipher(const Stages *s)
+{
+    for (int i = 0; i < s->count; i++)
+        if (s->kind[i] == ST_CHACHA || s->kind[i] == ST_CHACHA_PACK)
+            return s->kind[i];
+    return 0;
+}
+
+// Room for at least `need` bytes in the staging; what is there stays. 0 - no memory, or a staging of the runtime too small: it says how
+// much in `need`, and the call gives -3 ( NO_ROOM ).
+static int stages_room(Stages *s, size_t need)
+{
+    if (need <= (size_t)s->cap)
+        return 1;
+    if (s->ext)
+    {
+        s->need = need > 0x7FFFFFF0 ? 0x7FFFFFF0 : (int32_t)need;
+        return 0;
+    }
+    size_t cap = s->cap ? (size_t)s->cap : 4096;
+    while (cap < need)
+        cap *= 2;
+    if (cap > 0x7FFFFFF0)
+        return 0;
+    uint8_t *b = (uint8_t *)realloc(s->buf, cap);
+    if (!b)
+        return 0;
+    s->buf = b, s->cap = (int32_t)cap, s->gen++;
+    return 1;
+}
+
+#define NO_ROOM(s) ((s)->ext ? -3 : -1)
+
+static int env_room(Stages *s, size_t need)
+{
+    if (need <= s->env_cap)
+        return 1;
+    size_t cap = s->env_cap ? s->env_cap : 4096;
+    while (cap < need)
+        cap *= 2;
+    uint8_t *b = (uint8_t *)realloc(s->env, cap);
+    if (!b)
+        return 0;
+    s->env = b, s->env_cap = cap;
+    return 1;
+}
+
+// The keystream of key `k` for a pack of sequence `seq`: the key's nonce XOR ( 0^4 || seq ), little-endian.
+static void stages_key(Stages *s, const StageKey *k, uint64_t seq)
+{
+    memcpy(s->ks.key, k->key, 32);
+    memcpy(s->ks.nonce, k->iv, 12);
+    for (int i = 0; i < 8; i++)
+        s->ks.nonce[4 + i] ^= (uint8_t)(seq >> (8 * i));
+    s->ks.counter = 0, s->ks.pos = 64;
+}
+
+// A new stream through the same chain: nothing of the last one is left. The staging, the codecs and their memory stay, and what the
+// last call gave - `done`, `taken`, the plaintext received from `at` to `len` - stays for the runtime to take.
+static void stages_rearm(Stages *s)
+{
+    s->open = s->hdr_n = 0;
+    if (s->tx) // an Envelope with no Zstd: the plaintext lies in the staging after the room of its header
+        s->len = s->at = stages_has(s, ST_ENVELOPE) >= 0 && stages_has(s, ST_ZSTD) < 0 ? STAGE_HEADER : 0;
+    s->phase = SF_START;
+    s->env_len = s->env_at = 0;
+    if (s->cz)
+        ZSTD_CCtx_reset(s->cz, ZSTD_reset_session_only);
+    if (s->dz)
+        ZSTD_DCtx_reset(s->dz, ZSTD_reset_session_only);
+}
+
+// The start of a stream: the codec at its level, the keystream of its key.
+static int stages_start(Stages *s)
+{
+    const int z = stages_has(s, ST_ZSTD);
+    if (z >= 0)
+    {
+        if (s->tx)
+        {
+            if (!s->cz && !(s->cz = ZSTD_createCCtx()))
+                return 0;
+            ZSTD_CCtx_reset(s->cz, ZSTD_reset_session_only);
+            ZSTD_CCtx_setParameter(s->cz, ZSTD_c_compressionLevel, s->level[z]);
+        }
+        else
+        {
+            if (!s->dz && !(s->dz = ZSTD_createDCtx()))
+                return 0;
+            ZSTD_DCtx_reset(s->dz, ZSTD_reset_session_only);
+        }
+    }
+    if (s->tx && stages_cipher(s) == ST_CHACHA_PACK)
+    {
+        if (s->keys < 1)
+            return 0;
+        stages_key(s, &s->ring[0], (uint64_t)s->seq);
+        for (int i = 0; i < 4; i++)
+            s->hdr[i] = (uint8_t)(s->ring[0].id >> (8 * i));
+        for (int i = 0; i < 8; i++)
+            s->hdr[4 + i] = (uint8_t)((uint64_t)s->seq >> (8 * i));
+        s->hdr_n = 0;
+    }
+    else if (stages_cipher(s) == ST_CHACHA && s->keys > 0)
+        stages_key(s, &s->ring[0], 0);
+    s->phase = SF_RUN;
+    return 1;
+}
+
+// The bytes of the envelope from `env_at`, into `out`: what fits. 1 - all of them are out.
+static int env_emit(Stages *s, const uint8_t *from, size_t total, uint8_t *out, size_t room)
+{
+    const size_t n = total - s->env_at < room ? total - s->env_at : room;
+    memcpy(out, from + s->env_at, n);
+    s->env_at += n;
+    s->done += (int32_t)n;
+    return s->env_at == total;
+}
+
+// Seals the envelope at `p`: its header first, the text from STAGE_HEADER on, room after it for the signature and the tag. Its length; 0 - failed.
+static size_t env_seal(Stages *s, uint8_t *p, size_t text)
+{
+    for (int i = 0; i < 4; i++)
+        p[i] = (uint8_t)(s->env_id >> (8 * i));
+    for (int i = 0; i < 8; i++)
+        p[4 + i] = (uint8_t)((uint64_t)s->env_n >> (8 * i));
+    const jint r = Java_org_unirail_crypto_Crypto_packSeal(NULL, NULL, s->env_ctx, s->env_n, s->env_key, (jlong)(intptr_t)p, STAGE_HEADER, (jint)text);
+    return r < 0 ? 0 : (size_t)r;
+}
+
+// What the envelope adds after its text.
+static size_t env_after(const Stages *s) { return (s->env_key ? 64 : 0) + (s->env_ctx ? TAG : 0); }
+
+/*
+ * Transmits: the plaintext Java wrote to the staging, from `at` to `len`, through every stage into `out` - `room` bytes there. `end` - the
+ * source has no more. Writes `done` - the bytes put into `out` - and moves `at`. 1 - the stream is out whole; 0 - more to come: Java writes
+ * more plaintext once `at` reached `len`, or offers more room; -1 - failed. An Envelope keeps the plaintext - and with Zstd, what Zstd
+ * made of it - till the end: it seals the whole of it at once.
+ */
+static jint stages_tx(Stages *s, uint8_t *out, int32_t room, int end)
+{
+    s->done = 0;
+    if (s->phase == SF_START && !stages_start(s))
+        return -1;
+    const int env = stages_has(s, ST_ENVELOPE) >= 0, z = stages_has(s, ST_ZSTD) >= 0, cipher = stages_cipher(s);
+    if (env)
+    {
+        if (s->phase == SF_EMIT)
+            goto emit;
+        if (z)
+        {
+            if (s->env_len == 0)
+                s->env_len = STAGE_HEADER;
+            ZSTD_inBuffer in = {s->buf, (size_t)s->len, (size_t)s->at};
+            for (;;)
+            {
+                if (!env_room(s, s->env_len + ZSTD_CStreamOutSize()))
+                    return -1;
+                ZSTD_outBuffer o = {s->env, s->env_cap, s->env_len};
+                const size_t r = ZSTD_compressStream2(s->cz, &o, &in, end ? ZSTD_e_end : ZSTD_e_continue);
+                if (ZSTD_isError(r))
+                    return -1;
+                s->env_len = o.pos;
+                if (end ? r == 0 : in.pos == in.size)
+                    break;
+            }
+            s->at = (int32_t)in.pos;
+            if (!end)
+                return 0;
+            if (!env_room(s, s->env_len + env_after(s)))
+                return -1;
+            if (!(s->env_len = env_seal(s, s->env, s->env_len - STAGE_HEADER)))
+                return -1;
+        }
+        else
+        { // the plaintext lies in the staging from STAGE_HEADER on: the runtime wrote it there, and grows it when it is full ( buffer, stages_room )
+            s->at = s->len;
+            if (!end)
+                return 0;
+            if (!stages_room(s, (size_t)s->len + env_after(s)))
+                return NO_ROOM(s);
+            if (!(s->env_len = env_seal(s, s->buf, (size_t)s->len - STAGE_HEADER)))
+                return -1;
+        }
+        s->env_at = 0;
+        s->phase = SF_EMIT;
+    emit:
+        if (!env_emit(s, z ? s->env : s->buf, s->env_len, out, (size_t)room))
+            return 0;
+        stages_rearm(s);
+        return 1;
+    }
+    // Zstd, then ChaCha20 if there is one: compressed straight into `out`, deciphered there in place
+    if (cipher == ST_CHACHA_PACK)
+        for (; s->hdr_n < STAGE_HEADER && s->done < room; s->hdr_n++)
+            out[s->done++] = s->hdr[s->hdr_n];
+    if (s->hdr_n < STAGE_HEADER && cipher == ST_CHACHA_PACK)
+        return 0;
+    if (!z)
+        return -1; // a lone cipher goes in place: stages_xor
+    ZSTD_inBuffer in = {s->buf, (size_t)s->len, (size_t)s->at};
+    ZSTD_outBuffer o = {out, (size_t)room, (size_t)s->done};
+    const size_t r = ZSTD_compressStream2(s->cz, &o, &in, end ? ZSTD_e_end : ZSTD_e_continue);
+    if (ZSTD_isError(r))
+        return -1;
+    if (cipher)
+        stream_xor(&s->ks, out + s->done, o.pos - (size_t)s->done);
+    s->done = (int32_t)o.pos;
+    s->at = (int32_t)in.pos;
+    if (end && r == 0 && in.pos == in.size)
+    {
+        stages_rearm(s);
+        return 1;
+    }
+    return 0;
+}
+
+/*
+ * Receives: `len` bytes at `in` - deciphered in place where they lie - through every stage, wire first. `end` - the stream ended: no more
+ * bytes, only what the stages hold. Writes `taken` - the bytes of `in` the stages took: what they did not take Java offers again, and the
+ * first `open` of them are deciphered already - and the plaintext: in the staging from `at` to `len`. 1 - the stream ended and all of it
+ * is given; 0 - more to come; -1 - forged, or not of its signer; -2 - a pack of a key the session has not: its bytes are taken and dropped.
+ */
+static jint stages_rx(Stages *s, uint8_t *in, int32_t len, int end)
+{
+    s->taken = 0, s->at = s->len = 0;
+    if (s->phase == SF_START && !stages_start(s))
+        return -1;
+    const int env = stages_has(s, ST_ENVELOPE) >= 0, z = stages_has(s, ST_ZSTD) >= 0, cipher = stages_cipher(s);
+    if (env)
+    {
+        if (s->phase == SF_RUN)
+        { // the envelope gathers whole: sealed, it opens only so
+            uint8_t *acc;
+            if (z && !env_room(s, s->env_len + (size_t)len))
+                return -1;
+            if (z)
+                memcpy(s->env + s->env_len, in, (size_t)len), s->env_len += (size_t)len;
+            else
+            { // the staging gathers it, the plaintext is read from there: `env_at` - how much of it came
+                if (!stages_room(s, s->env_at + (size_t)len))
+                    return NO_ROOM(s);
+                memcpy(s->buf + s->env_at, in, (size_t)len);
+                s->env_at += (size_t)len;
+            }
+            s->taken = len;
+            if (!end)
+                return 0;
+            acc = z ? s->env : s->buf;
+            const size_t total = z ? s->env_len : s->env_at;
+            if (total < STAGE_HEADER)
+                return -1;
+            int32_t id = 0;
+            uint64_t n = 0;
+            for (int i = 0; i < 4; i++)
+                id |= (int32_t)acc[i] << (8 * i);
+            for (int i = 7; 0 <= i; i--)
+                n = n << 8 | acc[4 + i];
+            if (s->env_ctx && id != s->env_id)
+                return -1;
+            const jint text = Java_org_unirail_crypto_Crypto_packOpen(NULL, NULL, s->env_ctx, (jlong)n, s->env_key, (jlong)(intptr_t)acc, STAGE_HEADER, (jint)total);
+            if (text < 0)
+                return -1;
+            if (!z)
+            { // the plaintext stays where it is till the next call
+                stages_rearm(s);
+                s->at = STAGE_HEADER, s->len = STAGE_HEADER + text;
+                return 1;
+            }
+            s->env_at = STAGE_HEADER, s->env_len = STAGE_HEADER + (size_t)text;
+            s->phase = SF_FLUSH;
+        }
+        // decompressed from the opened envelope into the staging, as much as fits
+        if (!stages_room(s, ZSTD_DStreamOutSize()))
+            return NO_ROOM(s);
+        ZSTD_inBuffer i = {s->env, s->env_len, s->env_at};
+        ZSTD_outBuffer o = {s->buf, (size_t)s->cap, 0};
+        const size_t r = ZSTD_decompressStream(s->dz, &o, &i);
+        if (ZSTD_isError(r))
+            return -1;
+        s->env_at = i.pos;
+        s->at = 0, s->len = (int32_t)o.pos;
+        if (i.pos == i.size && o.pos < o.size)
+        {
+            stages_rearm(s);
+            return 1;
+        }
+        return 0;
+    }
+    // ChaCha20 ( deciphered in place ), then Zstd into the staging: its room first - a call that gives -3 has done nothing
+    if (z && !stages_room(s, ZSTD_DStreamOutSize()))
+        return NO_ROOM(s);
+    int32_t at = 0;
+    if (cipher == ST_CHACHA_PACK && s->hdr_n < STAGE_HEADER)
+    {
+        while (s->hdr_n < STAGE_HEADER && at < len)
+            s->hdr[s->hdr_n++] = in[at++];
+        s->taken = at;
+        if (s->hdr_n < STAGE_HEADER)
+            return 0;
+        int32_t id = 0;
+        uint64_t seq = 0;
+        for (int i = 0; i < 4; i++)
+            id |= (int32_t)s->hdr[i] << (8 * i);
+        for (int i = 7; 0 <= i; i--)
+            seq = seq << 8 | s->hdr[4 + i];
+        const StageKey *k = NULL;
+        for (int i = 0; i < s->keys && !k; i++)
+            if (s->ring[i].id == id)
+                k = &s->ring[i];
+        if (!k)
+        {
+            s->taken = len;
+            return -2;
+        }
+        stages_key(s, k, seq);
+        s->open = 0;
+    }
+    if (cipher && at + s->open < len)
+    {
+        stream_xor(&s->ks, in + at + s->open, (size_t)(len - at - s->open));
+        s->open = len - at;
+    }
+    if (!z)
+        return -1; // a lone cipher goes in place: stages_xor
+    ZSTD_inBuffer i = {in + at, (size_t)(len - at), 0};
+    ZSTD_outBuffer o = {s->buf, (size_t)s->cap, 0};
+    const size_t r = ZSTD_decompressStream(s->dz, &o, &i);
+    if (ZSTD_isError(r))
+        return -1;
+    s->taken = at + (int32_t)i.pos;
+    s->open -= (int32_t)i.pos;
+    if (s->open < 0)
+        s->open = 0;
+    s->at = 0, s->len = (int32_t)o.pos;
+    if (end && i.pos == i.size && o.pos < o.size)
+    {
+        stages_rearm(s);
+        return 1;
+    }
+    return 0;
+}
+
+// The memory of the stages: its codecs, its staging, the bytes of its envelope. The struct itself is the caller's.
+static void stages_free(Stages *s)
+{
+    ZSTD_freeCCtx(s->cz);
+    ZSTD_freeDCtx(s->dz);
+    if (!s->ext)
+        free(s->buf);
+    free(s->env);
+    OPENSSL_cleanse(&s->ks, sizeof s->ks);
+    s->cz = NULL, s->dz = NULL, s->buf = NULL, s->env = NULL;
+    s->cap = 0, s->env_cap = 0;
+    s->gen++;
+}
+
+JNIEXPORT jint JNICALL Java_org_unirail_Stages_size(JNIEnv *env, jclass cls) { return (jint)sizeof(Stages); }
+
+JNIEXPORT jint JNICALL Java_org_unirail_Stages_tx(JNIEnv *env, jclass cls, jlong stages, jlong out, jint room, jboolean end) { return stages_tx(ADDR(Stages, stages), ADDR(uint8_t, out), room, end); }
+
+JNIEXPORT jint JNICALL Java_org_unirail_Stages_rx(JNIEnv *env, jclass cls, jlong stages, jlong in, jint len, jboolean end) { return stages_rx(ADDR(Stages, stages), ADDR(uint8_t, in), len, end); }
+
+// A lone ChaCha20: the keystream over `len` bytes at `address`, in place. A pack of the session's key: its key and sequence first ( `start` ).
+JNIEXPORT void JNICALL Java_org_unirail_Stages_xor(JNIEnv *env, jclass cls, jlong stages, jlong address, jint len)
+{
+    Stages *s = ADDR(Stages, stages);
+    if (s->phase == SF_START)
+    {
+        if (s->tx && stages_cipher(s) == ST_CHACHA_PACK)
+            stages_key(s, &s->ring[0], (uint64_t)s->seq);
+        else if (s->keys > 0)
+            stages_key(s, &s->ring[0], (uint64_t)s->seq);
+        s->phase = SF_RUN;
+    }
+    stream_xor(&s->ks, ADDR(uint8_t, address), (size_t)len);
+}
+
+// The staging as a buffer of Java: taken again whenever `gen` changed. The room for `need` bytes first.
+JNIEXPORT jobject JNICALL Java_org_unirail_Stages_buffer(JNIEnv *env, jclass cls, jlong stages, jint need)
+{
+    Stages *s = ADDR(Stages, stages);
+    if (!stages_room(s, (size_t)(need < 1 ? 1 : need)))
+        return NULL;
+    return (*env)->NewDirectByteBuffer(env, s->buf, s->cap);
+}
+
+JNIEXPORT void JNICALL Java_org_unirail_Stages_free(JNIEnv *env, jclass cls, jlong stages) { stages_free(ADDR(Stages, stages)); }
+//#endregion
+
 //#region For a runtime with no JNI ( C# ): plain C over the same code. What takes no JNI object in the functions above goes straight through them.
 #define ADHOC(ret, name) JNIEXPORT ret JNICALL adhoc_##name
 
@@ -2036,4 +2478,17 @@ ADHOC(jint, pair_key)(uint8_t *key, uint8_t *iv, int32_t *id, const uint8_t *sec
 ADHOC(jint, pack_seal)(jlong ctx, jlong n, jlong secret, jlong address, jint header, jint len) { return Java_org_unirail_crypto_Crypto_packSeal(NULL, NULL, ctx, n, secret, address, header, len); }
 
 ADHOC(jint, pack_open)(jlong ctx, jlong n, jlong pub, jlong address, jint header, jint total) { return Java_org_unirail_crypto_Crypto_packOpen(NULL, NULL, ctx, n, pub, address, header, total); }
+
+ADHOC(jint, stages_size)(void) { return (jint)sizeof(Stages); }
+
+ADHOC(jint, stages_tx)(jlong stages, uint8_t *out, jint room, jint end) { return stages_tx(ADDR(Stages, stages), out, room, end); }
+
+ADHOC(jint, stages_rx)(jlong stages, uint8_t *in, jint len, jint end) { return stages_rx(ADDR(Stages, stages), in, len, end); }
+
+ADHOC(void, stages_xor)(jlong stages, uint8_t *p, jint len) { Java_org_unirail_Stages_xor(NULL, NULL, stages, (jlong)(intptr_t)p, len); }
+
+// Room for `need` bytes in the staging: the runtime reads `buf` and `cap` where they lie. 0 - no memory.
+ADHOC(jint, stages_room)(jlong stages, jint need) { return stages_room(ADDR(Stages, stages), (size_t)(need < 1 ? 1 : need)); }
+
+ADHOC(void, stages_free)(jlong stages) { stages_free(ADDR(Stages, stages)); }
 //#endregion

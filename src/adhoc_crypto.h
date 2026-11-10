@@ -44,6 +44,12 @@ ADHOC_API int32_t adhoc_ed25519_verify(const uint8_t *signature, const uint8_t *
 ADHOC_API int32_t adhoc_pair_key(uint8_t *key, uint8_t *iv, int32_t *id, const uint8_t *secret, const uint8_t *their, const uint8_t *label, int32_t label_len);
 ADHOC_API int32_t adhoc_pack_seal(int64_t ctx, int64_t n, int64_t secret, int64_t address, int32_t header, int32_t len);
 ADHOC_API int32_t adhoc_pack_open(int64_t ctx, int64_t n, int64_t pub, int64_t address, int32_t header, int32_t total);
+ADHOC_API int32_t adhoc_stages_size(void);
+ADHOC_API int32_t adhoc_stages_tx(int64_t stages, uint8_t *out, int32_t room, int32_t end);
+ADHOC_API int32_t adhoc_stages_rx(int64_t stages, uint8_t *in, int32_t len, int32_t end);
+ADHOC_API void adhoc_stages_xor(int64_t stages, uint8_t *p, int32_t len);
+ADHOC_API int32_t adhoc_stages_room(int64_t stages, int32_t need);
+ADHOC_API void adhoc_stages_free(int64_t stages);
 #ifdef __cplusplus
 }
 #endif

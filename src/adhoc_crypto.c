@@ -2055,9 +2055,12 @@ static void stages_rearm(Stages *s)
         ZSTD_DCtx_reset(s->dz, ZSTD_reset_session_only);
 }
 
-// The start of a stream: the codec at its level, the keystream of its key.
+// The start of a stream: the codec at its level, the keystream of its key. Nothing of a stream before is left: one torn on the way left
+// its header and its envelope half done.
 static int stages_start(Stages *s)
 {
+    s->hdr_n = 0;
+    s->env_len = s->env_at = 0;
     const int z = stages_has(s, ST_ZSTD);
     if (z >= 0)
     {
@@ -2087,7 +2090,11 @@ static int stages_start(Stages *s)
         s->hdr_n = 0;
     }
     else if (stages_cipher(s) == ST_CHACHA && s->keys > 0)
+    { // a stream's own key keys the keystream once: the frames of Zstd that follow go on with it, as the receiver's does - a keystream
+      // started again would repeat itself. The runtime gives a key anew ( `keys` ) to start another
         stages_key(s, &s->ring[0], 0);
+        s->keys = 0;
+    }
     s->phase = SF_RUN;
     return 1;
 }

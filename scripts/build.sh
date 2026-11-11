@@ -21,6 +21,14 @@ if [ ! -d "$SRC" ]; then
   git clone --depth 1 --single-branch https://github.com/google/boringssl.git "$SRC"
 fi
 echo "BoringSSL $(git -C "$SRC" log -1 --format='%h %ad' --date=short 2>/dev/null || echo '(no git)')"
+# BoringSSL ( 5fa9e92, 2026-11-10 ) marks the functions of its ARMv8.4 DIT instructions with the feature for clang only: GCC is left
+# with an empty mark and its assembler refuses `msr dit` ( linux/aarch64 in manylinux ). The mark GCC takes is the architecture of
+# those functions alone; they run only where the CPU has DIT. Once BoringSSL marks them itself the line is gone and nothing changes.
+# `-i.orig`: BSD sed of macOS takes the suffix the same way as GNU sed.
+if [ -f "$SRC/crypto/internal.h" ]; then
+  sed -i.orig 's/^#define DIT_FEATURE$/#define DIT_FEATURE __attribute__((target("arch=armv8.4-a")))/' "$SRC/crypto/internal.h"
+  rm -f "$SRC/crypto/internal.h.orig"
+fi
 
 # zstd: its compressor and decompressor, assembly off - it builds alike everywhere
 ZSRC=${ZSTD:-$WORK/zstd}
